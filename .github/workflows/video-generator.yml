@@ -1,0 +1,110 @@
+name: Automated Video Generator
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_mode:
+        description: 'Select video mode'
+        required: true
+        type: choice
+        options:
+          - '1 - Simple Video (Full Screen)'
+          - '2 - Template Mode (With Anchor)'
+        default: '1 - Simple Video (Full Screen)'
+  push:
+    paths:
+      - 'video.txt'
+
+jobs:
+  generate-videos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install FFmpeg
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+        ffmpeg -version
+    
+    - name: Install Python Dependencies
+      run: |
+        pip install --upgrade pip
+        pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib Pillow numpy opencv-python moviepy gtts pydub
+    
+    - name: Verify Required Files
+      run: |
+        echo "Checking required files..."
+        ls -la
+        
+        if [ ! -f "drive_token.pickle" ]; then
+          echo "❌ ERROR: drive_token.pickle not found!"
+          exit 1
+        fi
+        
+        if [ ! -f "video.txt" ]; then
+          echo "❌ ERROR: video.txt not found!"
+          exit 1
+        fi
+        
+        if [ ! -f "github_video_generator.py" ]; then
+          echo "❌ ERROR: github_video_generator.py not found!"
+          exit 1
+        fi
+        
+        if [ ! -f "live.py" ]; then
+          echo "❌ ERROR: live.py not found!"
+          exit 1
+        fi
+        
+        echo "✅ All required files present"
+        echo ""
+        echo "📄 video.txt content:"
+        cat video.txt
+    
+    - name: Run Video Generator
+      run: |
+        echo "🚀 Starting video generation..."
+        python github_video_generator.py
+      env:
+        PYTHONUNBUFFERED: 1
+        VIDEO_MODE: ${{ github.event.inputs.video_mode || '1 - Simple Video (Full Screen)' }}
+    
+    - name: List Generated Files
+      if: always()
+      run: |
+        echo "📂 Work directory contents:"
+        ls -lah work/ || echo "No work directory"
+        
+        echo ""
+        echo "📂 Output directory contents:"
+        ls -lah output/ || echo "No output directory"
+    
+    - name: Upload Output Videos (Success)
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: generated-videos-${{ github.run_number }}
+        path: output/
+        retention-days: 7
+        if-no-files-found: warn
+    
+    - name: Upload Debug Artifacts (Failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: debug-artifacts-${{ github.run_number }}
+        path: |
+          work/
+          output/
+          *.log
+        retention-days: 3
+        if-no-files-found: ignore
