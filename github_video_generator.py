@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-GitHub-based Automated Video Generator - SIMPLIFIED
+GitHub-based Automated Video Generator (Download Link Version)
 - Reads Drive links from video.txt
-- Downloads from Drive → live.py generates video → Upload to Drive
-- NO video_generator.py processing anymore
+- Downloads from Drive → Generates Video → Saves locally
+- NO Drive upload - creates download links via GitHub Artifacts
 """
 
 import os
@@ -15,11 +15,11 @@ from pathlib import Path
 from datetime import datetime
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload
 import io
 
 class DriveVideoGenerator:
-    def __init__(self):
+    def __init__(self, mode='1'):
         self.credentials = None
         self.service = None
         self.work_dir = Path('./work')
@@ -27,12 +27,8 @@ class DriveVideoGenerator:
         self.work_dir.mkdir(exist_ok=True)
         self.output_dir.mkdir(exist_ok=True)
         
-        # Get mode from environment (set by GitHub Actions)
-        mode_input = os.environ.get('VIDEO_MODE', '1 - Simple Video (Full Screen)')
-        if '1' in mode_input:
-            self.video_mode = 'video'
-        else:
-            self.video_mode = 'with_template'
+        # Mode: '1' = video, '2' = with_template
+        self.mode = 'video' if mode == '1' else 'with_template'
         
     def authenticate(self):
         """Load credentials from drive_token.pickle"""
@@ -92,7 +88,7 @@ class DriveVideoGenerator:
                     folder_ids.append(folder_id)
                     print(f"✅ Found project: {folder_id}")
                 else:
-                    print(f"⚠️ Invalid link: {line}")
+                    print(f"⚠️  Invalid link: {line}")
         
         return folder_ids
     
@@ -136,13 +132,17 @@ class DriveVideoGenerator:
             return None
     
     def download_folder_structure(self, folder_id, project_name):
-        """Download entire folder structure (only 1st folder now)"""
+        """Download entire folder structure recursively"""
         print(f"\n{'='*70}")
         print(f"📥 Downloading Project: {project_name}")
         print(f"{'='*70}\n")
         
         project_dir = self.work_dir / project_name
         project_dir.mkdir(exist_ok=True)
+        
+        structure = {
+            '1st': None
+        }
         
         # Get main folder contents
         files = self.list_folder_contents(folder_id)
@@ -151,13 +151,10 @@ class DriveVideoGenerator:
             print("❌ Folder is empty or inaccessible!")
             return None
         
-        # Find '1st' folder
-        first_folder_path = None
-        
         for file in files:
             if file['mimeType'] == 'application/vnd.google-apps.folder':
                 folder_name = file['name']
-                folder_id_sub = file['id']
+                folder_id = file['id']
                 
                 if folder_name == '1st':
                     print(f"\n📂 Processing: {folder_name}/")
@@ -165,20 +162,21 @@ class DriveVideoGenerator:
                     folder_path.mkdir(exist_ok=True)
                     
                     # Download folder contents recursively
-                    self.download_folder_recursive(folder_id_sub, folder_path)
+                    self.download_folder_recursive(folder_id, folder_path)
                     
-                    first_folder_path = folder_path
+                    structure['1st'] = folder_path
         
-        # Validate
-        if not first_folder_path:
-            print("\n❌ '1st' folder not found!")
+        # Validate structure
+        if not structure['1st']:
+            print("\n❌ Invalid folder structure!")
+            print("   Required: '1st' folder")
             return None
         
         print(f"\n{'='*70}")
         print("✅ Download Complete!")
         print(f"{'='*70}\n")
         
-        return first_folder_path
+        return structure
     
     def download_folder_recursive(self, folder_id, destination):
         """Recursively download folder contents"""
@@ -211,14 +209,16 @@ class DriveVideoGenerator:
         except:
             return 0
     
-    def run_live_py(self, first_folder):
-        """Run live.py to create final_video.mp4"""
-        if not first_folder or not first_folder.exists():
+    def run_live_py(self, project_structure):
+        """Run live.py to create final video"""
+        first_dir = project_structure['1st']
+        
+        if not first_dir or not first_dir.exists():
             print("❌ '1st' folder not found!")
             return None
         
         print(f"\n{'='*70}")
-        print(f"🎬 Running live.py (Mode: {self.video_mode.upper()})")
+        print(f"🎬 Running live.py (Mode: {self.mode})")
         print(f"{'='*70}\n")
         
         # Import live.py
@@ -226,17 +226,17 @@ class DriveVideoGenerator:
         from live import NewsVideoCreator
         
         try:
-            creator = NewsVideoCreator(str(first_folder), mode=self.video_mode)
+            creator = NewsVideoCreator(str(first_dir), mode=self.mode)
             creator.create_final_video()
             
             # Find output
-            output_video = first_folder / "output" / "final_video.mp4"
+            output_video = first_dir / "output" / "final_video.mp4"
             
             if output_video.exists():
-                print(f"\n✅ final_video.mp4 created successfully!")
+                print(f"\n✅ Video created successfully!")
                 return output_video
             else:
-                print("\n❌ final_video.mp4 not found in output!")
+                print("\n❌ Output video not found!")
                 return None
                 
         except Exception as e:
@@ -245,10 +245,10 @@ class DriveVideoGenerator:
             traceback.print_exc()
             return None
     
-    def upload_to_drive(self, video_path, parent_folder_id):
-        """Upload video to Drive with timestamped folder"""
+    def save_to_output(self, video_path, project_name):
+        """Save video to output folder with duration-based name"""
         print(f"\n{'='*70}")
-        print("📤 Uploading to Google Drive")
+        print("💾 Saving Output Video")
         print(f"{'='*70}\n")
         
         try:
@@ -258,70 +258,31 @@ class DriveVideoGenerator:
             # Format: 5m30s
             minutes = int(duration // 60)
             seconds = int(duration % 60)
-            folder_name = f"{minutes}m{seconds}s"
+            time_name = f"{minutes}m{seconds}s"
             
-            print(f"   Creating folder: {folder_name}")
+            # Create output filename
+            output_name = f"{project_name}_{time_name}.mp4"
+            output_path = self.output_dir / output_name
             
-            # Create folder in Drive
-            folder_metadata = {
-                'name': folder_name,
-                'mimeType': 'application/vnd.google-apps.folder',
-                'parents': [parent_folder_id]
-            }
+            # Copy video
+            subprocess.run(['cp', str(video_path), str(output_path)], check=True)
             
-            folder = self.service.files().create(
-                body=folder_metadata,
-                fields='id, webViewLink'
-            ).execute()
+            file_size = output_path.stat().st_size / (1024*1024)
             
-            folder_id = folder.get('id')
-            folder_link = folder.get('webViewLink')
-            print(f"   ✅ Folder created: {folder_link}")
+            print(f"   ✅ Saved: {output_name}")
+            print(f"   📊 Size: {file_size:.1f} MB")
+            print(f"   ⏱️  Duration: {time_name}")
             
-            # Upload video
-            video_name = f"{minutes}m{seconds}s.mp4"
-            
-            print(f"\n   Uploading: {video_name}")
-            print(f"   Size: {video_path.stat().st_size / (1024*1024):.1f} MB")
-            
-            file_metadata = {
-                'name': video_name,
-                'parents': [folder_id]
-            }
-            
-            media = MediaFileUpload(
-                str(video_path),
-                mimetype='video/mp4',
-                resumable=True,
-                chunksize=10*1024*1024
-            )
-            
-            request = self.service.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields='id, webViewLink'
-            )
-            
-            response = None
-            while response is None:
-                status, response = request.next_chunk()
-                if status:
-                    progress = int(status.progress() * 100)
-                    print(f"   Uploading: {progress}%", end='\r')
-            
-            print(f"\n   ✅ Video uploaded successfully!")
-            print(f"   🔗 Video link: {response.get('webViewLink')}")
-            
-            return response.get('id')
+            return output_path
             
         except Exception as e:
-            print(f"\n   ❌ Upload failed: {e}")
+            print(f"\n   ❌ Save failed: {e}")
             import traceback
             traceback.print_exc()
             return None
     
     def process_project(self, project_folder_id, index=1, total=1):
-        """Main processing pipeline - SIMPLIFIED"""
+        """Main processing pipeline for one project"""
         print("\n" + "="*70)
         print(f"🚀 PROJECT {index}/{total}")
         print("="*70)
@@ -329,29 +290,30 @@ class DriveVideoGenerator:
         project_name = f"project_{index}_{datetime.now().strftime('%H%M%S')}"
         
         try:
-            # Step 1: Download 1st folder from Drive
-            first_folder = self.download_folder_structure(project_folder_id, project_name)
+            # Step 1: Download from Drive
+            structure = self.download_folder_structure(project_folder_id, project_name)
             
-            if not first_folder:
-                print(f"\n❌ Project {index} failed: Could not download 1st folder")
+            if not structure:
+                print(f"\n❌ Project {index} failed: Invalid structure")
                 return False
             
-            # Step 2: Run live.py (creates final_video.mp4)
-            final_video = self.run_live_py(first_folder)
+            # Step 2: Run live.py
+            final_video = self.run_live_py(structure)
             
             if not final_video:
                 print(f"\n❌ Project {index} failed: Could not create video")
                 return False
             
-            # Step 3: Upload to Drive
-            video_id = self.upload_to_drive(final_video, project_folder_id)
+            # Step 3: Save to output folder
+            output_path = self.save_to_output(final_video, project_name)
             
-            if not video_id:
-                print(f"\n❌ Project {index} failed: Could not upload")
+            if not output_path:
+                print(f"\n❌ Project {index} failed: Could not save video")
                 return False
             
             print("\n" + "="*70)
             print(f"✅ PROJECT {index} COMPLETED SUCCESSFULLY!")
+            print(f"📁 Output: {output_path.name}")
             print("="*70)
             
             return True
@@ -365,14 +327,13 @@ class DriveVideoGenerator:
     def run(self):
         """Main entry point"""
         print("""
-╔══════════════════════════════════════════════════════════════════╗
-║         GITHUB AUTOMATED VIDEO GENERATOR - SIMPLIFIED            ║
-║              Powered by GitHub Actions                           ║
-╚══════════════════════════════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════════════════════╗
+║         GITHUB AUTOMATED VIDEO GENERATOR                          ║
+║         Download Link Version - No Drive Upload                   ║
+╚═══════════════════════════════════════════════════════════════════╝
         """)
         
-        print(f"🎬 Selected Mode: {self.video_mode.upper()}")
-        print()
+        print(f"🎯 Mode Selected: {self.mode.upper()}\n")
         
         # Authenticate
         self.authenticate()
@@ -411,8 +372,17 @@ class DriveVideoGenerator:
         print(f"\n✅ Successful: {successful}/{len(results)}")
         print(f"❌ Failed: {failed}/{len(results)}")
         
+        if successful > 0:
+            print("\n📥 DOWNLOAD YOUR VIDEOS:")
+            print("   1. Go to GitHub Actions page")
+            print("   2. Find this workflow run")
+            print("   3. Scroll to bottom")
+            print("   4. Click 'Artifacts' section")
+            print("   5. Download ZIP file")
+            print("\n⏱️  Files available for 7 days")
+        
         if failed > 0:
-            print("\n⚠️ Failed projects:")
+            print("\n⚠️  Failed projects:")
             for i, r in enumerate(results, 1):
                 if not r['success']:
                     print(f"   {i}. {r['folder_id']}")
@@ -425,7 +395,14 @@ class DriveVideoGenerator:
 
 
 def main():
-    generator = DriveVideoGenerator()
+    # Get mode from command line argument
+    mode = sys.argv[1] if len(sys.argv) > 1 else '1'
+    
+    if mode not in ['1', '2']:
+        print("❌ Invalid mode! Use 1 or 2")
+        sys.exit(1)
+    
+    generator = DriveVideoGenerator(mode)
     generator.run()
 
 
