@@ -1,19 +1,15 @@
-name: Automated Video Generator
+name: Automated Video Generator with Download Link
 
 on:
   workflow_dispatch:
     inputs:
-      video_mode:
-        description: 'Select video mode'
+      mode:
+        description: 'Live.py Mode (1=video, 2=with_template)'
         required: true
         type: choice
         options:
-          - '1 - Simple Video (Full Screen)'
-          - '2 - Template Mode (With Anchor)'
-        default: '1 - Simple Video (Full Screen)'
-  push:
-    paths:
-      - 'video.txt'
+          - '1'
+          - '2'
 
 jobs:
   generate-videos:
@@ -42,7 +38,7 @@ jobs:
     
     - name: Verify Required Files
       run: |
-        echo "Checking required files..."
+        echo "🔍 Checking required files..."
         ls -la
         
         if [ ! -f "drive_token.pickle" ]; then
@@ -55,8 +51,8 @@ jobs:
           exit 1
         fi
         
-        if [ ! -f "github_video_generator.py" ]; then
-          echo "❌ ERROR: github_video_generator.py not found!"
+        if [ ! -f "github_video_generator_download.py" ]; then
+          echo "❌ ERROR: github_video_generator_download.py not found!"
           exit 1
         fi
         
@@ -73,10 +69,10 @@ jobs:
     - name: Run Video Generator
       run: |
         echo "🚀 Starting video generation..."
-        python github_video_generator.py
+        echo "Mode: ${{ inputs.mode }}"
+        python github_video_generator_download.py ${{ inputs.mode }}
       env:
         PYTHONUNBUFFERED: 1
-        VIDEO_MODE: ${{ github.event.inputs.video_mode || '1 - Simple Video (Full Screen)' }}
     
     - name: List Generated Files
       if: always()
@@ -87,15 +83,49 @@ jobs:
         echo ""
         echo "📂 Output directory contents:"
         ls -lah output/ || echo "No output directory"
+        
+        echo ""
+        echo "📊 Output file sizes:"
+        du -h output/* 2>/dev/null || echo "No output files"
     
-    - name: Upload Output Videos (Success)
+    - name: 🎉 Upload Videos as Artifacts (Download Links)
       if: success()
       uses: actions/upload-artifact@v4
       with:
         name: generated-videos-${{ github.run_number }}
-        path: output/
+        path: output/*.mp4
         retention-days: 7
         if-no-files-found: warn
+    
+    - name: 📝 Create Download Instructions
+      if: success()
+      run: |
+        echo "# ✅ Video Generation Complete!" > DOWNLOAD.md
+        echo "" >> DOWNLOAD.md
+        echo "## 📥 How to Download:" >> DOWNLOAD.md
+        echo "" >> DOWNLOAD.md
+        echo "1. Go to this workflow run" >> DOWNLOAD.md
+        echo "2. Scroll to bottom of page" >> DOWNLOAD.md
+        echo "3. Find **Artifacts** section" >> DOWNLOAD.md
+        echo "4. Click on: **generated-videos-${{ github.run_number }}**" >> DOWNLOAD.md
+        echo "5. ZIP file will download automatically" >> DOWNLOAD.md
+        echo "6. Extract ZIP to get your videos" >> DOWNLOAD.md
+        echo "" >> DOWNLOAD.md
+        echo "## 📊 Generated Videos:" >> DOWNLOAD.md
+        echo "" >> DOWNLOAD.md
+        echo "\`\`\`" >> DOWNLOAD.md
+        ls -lh output/*.mp4 2>/dev/null || echo "No videos found" >> DOWNLOAD.md
+        echo "\`\`\`" >> DOWNLOAD.md
+        echo "" >> DOWNLOAD.md
+        echo "🔗 **Direct Link:** Click 'Artifacts' below this workflow" >> DOWNLOAD.md
+    
+    - name: Upload Download Instructions
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: DOWNLOAD-INSTRUCTIONS
+        path: DOWNLOAD.md
+        retention-days: 7
     
     - name: Upload Debug Artifacts (Failure)
       if: failure()
@@ -108,3 +138,32 @@ jobs:
           *.log
         retention-days: 3
         if-no-files-found: ignore
+    
+    - name: 💬 Job Summary
+      if: always()
+      run: |
+        echo "## 📊 Video Generation Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -d "output" ] && [ "$(ls -A output/*.mp4 2>/dev/null)" ]; then
+          echo "### ✅ Success!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Generated Videos:**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          ls -lh output/*.mp4 >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📥 Download Your Videos:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Scroll to bottom of this page" >> $GITHUB_STEP_SUMMARY
+          echo "2. Find **Artifacts** section" >> $GITHUB_STEP_SUMMARY
+          echo "3. Click: **generated-videos-${{ github.run_number }}**" >> $GITHUB_STEP_SUMMARY
+          echo "4. ZIP file downloads automatically" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⏱️ **Retention:** 7 days" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "### ❌ Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check debug artifacts for details" >> $GITHUB_STEP_SUMMARY
+        fi
